@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "healthcare-voice-agent"
+version = "0.1.0"
+description = "Demo-only outbound healthcare voice agent using LiveKit and Opik"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "livekit-agents>=1.8,<2",
+  "livekit-api>=1.2,<2",
+  "pydantic>=2.10,<3",
+  "python-dotenv>=1.0,<2",
+  "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+opik = ["opik>=1.8"]
+voice = ["livekit-plugins-openai>=1.8,<2"]
+dev = ["ruff>=0.9"]
+
+[project.scripts]
+healthcare-agent = "src.agent:main"
+healthcare-dispatch = "src.outbound_dispatcher:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

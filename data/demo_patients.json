@@ -1,0 +1,14 @@
+[
+  {
+    "demo_id": "demo-001",
+    "preferred_name": "Swapnil",
+    "biomarkers": [
+      {"name": "HbA1c", "value": "6.2", "unit": "%"},
+      {"name": "fasting insulin", "value": "11.4", "unit": "µIU/mL"},
+      {"name": "ApoB", "value": "92", "unit": "mg/dL"},
+      {"name": "eGFR", "value": "98", "unit": "mL/min/1.73 m²"},
+      {"name": "ALT", "value": "24", "unit": "U/L"},
+      {"name": "fasting glucose", "value": "102", "unit": "mg/dL"}
+    ]
+  }
+]
