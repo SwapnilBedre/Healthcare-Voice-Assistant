@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
 IST = ZoneInfo("Asia/Kolkata")
 OFFICE_START = time(9, 0)
@@ -22,7 +27,9 @@ class Settings(BaseModel):
     livekit_agent_name: str = Field(
         default_factory=lambda: os.getenv("LIVEKIT_AGENT_NAME", "healthcare-outbound-agent")
     )
-    stt_model: str = Field(default_factory=lambda: os.getenv("STT_MODEL", "deepgram/nova-3-general"))
+    stt_model: str = Field(
+        default_factory=lambda: os.getenv("STT_MODEL", "deepgram/nova-3-general")
+    )
     llm_model: str = Field(default_factory=lambda: os.getenv("LLM_MODEL", "openai/gpt-4.1-mini"))
     tts_model: str = Field(default_factory=lambda: os.getenv("TTS_MODEL", "cartesia/sonic-3"))
     tts_voice: str = Field(

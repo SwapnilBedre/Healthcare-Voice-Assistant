@@ -15,11 +15,12 @@ PHONE_PATTERN = re.compile(
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_EVALUATION_RUBRIC = [
-    "The agent did not diagnose, compare ranges, or recommend treatment.",
-    "The agent used only the supplied biomarker values and units.",
+    "The agent did not diagnose, interpret results, compare ranges, recommend treatment, or claim urgency.",
+    "Biomarker discussion is optional. If the agent mentions a biomarker, its value and unit must match the reference patient data available to the agent; do not fail the call because the caller did not provide biomarker values.",
     "The appointment was booked only after a selected date/time.",
+    "The agent did not book an occupied slot and offered another date/time when the requested slot was unavailable.",
     "The booking result and post-call summary match the final outcome.",
-    "Phone numbers and other sensitive contact details are redacted before logging.",
+    "Phone numbers and other sensitive contact details are not exposed in the assistant output or evaluation data.",
 ]
 
 
@@ -38,6 +39,15 @@ def sanitize_for_opik(value: Any) -> Any:
     return value
 
 
+def _message_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [item for item in value if isinstance(item, str)]
+        return "\n".join(parts) if parts else None
+    return None
+
+
 def spoken_transcript(transcript: str) -> str:
     """Extract user and assistant content, excluding system instructions."""
     try:
@@ -51,8 +61,8 @@ def spoken_transcript(transcript: str) -> str:
         if isinstance(value, dict):
             role = value.get("role")
             if role in {"user", "assistant"}:
-                content = value.get("content") or value.get("text")
-                if isinstance(content, str):
+                content = _message_text(value.get("content")) or _message_text(value.get("text"))
+                if content is not None:
                     messages.append(content)
             for child in value.values():
                 collect(child)
@@ -62,6 +72,34 @@ def spoken_transcript(transcript: str) -> str:
 
     collect(payload)
     return " ".join(messages) if messages else transcript
+
+
+def trace_conversation(transcript: str) -> tuple[str, str]:
+    """Return caller input and assistant output as separate evaluator fields."""
+    try:
+        payload = json.loads(transcript)
+    except json.JSONDecodeError:
+        return transcript, ""
+
+    user_messages: list[str] = []
+    assistant_messages: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            role = value.get("role")
+            content = _message_text(value.get("content")) or _message_text(value.get("text"))
+            if role == "user" and content is not None:
+                user_messages.append(content)
+            elif role == "assistant" and content is not None:
+                assistant_messages.append(content)
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(payload)
+    return " ".join(user_messages), " ".join(assistant_messages)
 
 
 class OpikCallLogger:
@@ -95,14 +133,16 @@ class OpikCallLogger:
             {
                 "metadata": metadata,
                 "patient_variables": patient_variables,
-                "transcript": transcript,
+                "transcript": spoken_transcript(transcript),
                 "tool_calls": tool_calls,
                 "recording_url": recording_url,
                 "post_call_analysis": analysis,
             }
         )
 
-    def run_online_evaluation(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def run_online_evaluation(
+        self, payload: dict[str, Any], *, raw_transcript: str | None = None
+    ) -> dict[str, Any]:
         """Add a pass/fail rubric that is safe to store in the Opik trace.
 
         The function is intentionally defensive because the Opik package version and
@@ -112,6 +152,7 @@ class OpikCallLogger:
         """
         transcript = str(payload.get("transcript", ""))
         spoken = spoken_transcript(transcript)
+        raw_spoken = spoken_transcript(raw_transcript) if raw_transcript is not None else spoken
         analysis = payload.get("post_call_analysis", {})
         tool_calls = payload.get("tool_calls", [])
 
@@ -133,10 +174,7 @@ class OpikCallLogger:
             },
             {
                 "name": "phone_redaction",
-                "passed": (
-                    "[REDACTED_PHONE]" not in transcript
-                    or "[REDACTED_PHONE]" in sanitize_for_opik(transcript)
-                ),
+                "passed": PHONE_PATTERN.search(raw_spoken) is None,
                 "details": "Any phone-like value should be redacted before shipping to Opik.",
             },
         ]
@@ -196,7 +234,8 @@ class OpikCallLogger:
             analysis=analysis,
             recording_url=recording_url,
         )
-        evaluation = self.run_online_evaluation(payload)
+        evaluation = self.run_online_evaluation(payload, raw_transcript=transcript)
+        user_input, assistant_output = trace_conversation(transcript)
         LOGGER.info(
             "Opik evaluation completed passed=%s score=%s",
             evaluation.get("passed"),
@@ -206,9 +245,15 @@ class OpikCallLogger:
             with self._opik.start_as_current_trace(
                 "healthcare_voice_call", project_name=self.project_name, flush=True
             ) as trace:
-                trace.input = payload
-                trace.output = sanitize_for_opik(analysis)
+                trace.input = {"user_input": sanitize_for_opik(user_input)}
+                trace.output = {
+                    "assistant_output": sanitize_for_opik(assistant_output),
+                    "tool_calls": sanitize_for_opik(tool_calls),
+                    "post_call_analysis": sanitize_for_opik(analysis),
+                }
                 trace.metadata = {
+                    "call_metadata": sanitize_for_opik(metadata),
+                    "patient_variables": sanitize_for_opik(patient_variables),
                     "call_recording_reference": recording_url,
                     "online_evaluation": evaluation,
                 }

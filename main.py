@@ -1,5 +1,4 @@
-"""Friendly local entry point for a beginner reviewing this assignment.
-
+"""
 Run ``python main.py`` after installing the project. This menu only exercises the
 safe local appointment-booking flow. It cannot make a phone call.
 """

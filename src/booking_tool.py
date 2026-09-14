@@ -20,6 +20,10 @@ APPOINTMENT_DURATION = timedelta(minutes=30)
 LOGGER = logging.getLogger(__name__)
 
 
+class AppointmentConflictError(ValueError):
+    """Raised when the requested 30-minute slot is already booked."""
+
+
 def book_appointment(
     patient_id: str,
     patient_name: str,
@@ -69,7 +73,9 @@ class AppointmentBookingService:
         office_end = datetime.combine(request.preferred_date, time(18, 0), IST)
         if not is_office_hours(start) or start + APPOINTMENT_DURATION > office_end:
             raise ValueError(
-                "Appointments must fit on a weekday between 09:00 and 18:00 Asia/Kolkata."
+                f"The requested slot {request.preferred_date.isoformat()} "
+                f"{request.preferred_time.strftime('%H:%M')} is outside weekday "
+                "09:00-17:30 appointment hours in Asia/Kolkata."
             )
 
         appointment = Appointment(
@@ -79,6 +85,11 @@ class AppointmentBookingService:
             date=request.preferred_date,
             time=request.preferred_time,
         )
+        if self._slot_is_booked(appointment):
+            raise AppointmentConflictError(
+                f"The slot {request.preferred_date.isoformat()} "
+                f"{request.preferred_time.strftime('%H:%M')} Asia/Kolkata is already booked."
+            )
         self._append_to_file(appointment)
         self.latest_appointment = appointment
         LOGGER.info(
@@ -100,6 +111,33 @@ class AppointmentBookingService:
             )
         )
         return appointment
+
+    def _slot_is_booked(self, appointment: Appointment) -> bool:
+        """Return whether the requested 30-minute interval overlaps a booking."""
+        if not self.storage_path.exists():
+            return False
+        try:
+            records = json.loads(self.storage_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("appointments.json is not valid JSON; fix it before booking.") from exc
+        if not isinstance(records, list):
+            raise ValueError("appointments.json must contain a JSON list.")
+        requested_start = datetime.combine(appointment.date, appointment.time, IST)
+        requested_end = requested_start + APPOINTMENT_DURATION
+        for record in records:
+            if not isinstance(record, dict) or record.get("status") != "BOOKED":
+                continue
+            if record.get("date") != appointment.date.isoformat():
+                continue
+            try:
+                existing_time = datetime.strptime(record["time"], "%H:%M").time()
+            except (KeyError, TypeError, ValueError):
+                continue
+            existing_start = datetime.combine(appointment.date, existing_time, IST)
+            existing_end = existing_start + APPOINTMENT_DURATION
+            if existing_start < requested_end and requested_start < existing_end:
+                return True
+        return False
 
     def _append_to_file(self, appointment: Appointment) -> None:
         """Create the data folder/file when needed, then append one appointment."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -30,13 +31,29 @@ def safe_instructions(patient: DemoPatient) -> str:
     supplied = "; ".join(
         f"{item.name.value}: {item.value} {item.unit}" for item in patient.biomarkers
     )
+    current_date = datetime.now(IST).date().isoformat()
     return f"""You are an English-only healthcare appointment coordinator in India.
+Today is {current_date} in Asia/Kolkata. Use this date only when the person explicitly says today.
 Use only these supplied demo biomarker facts: {supplied}.
 You may read those values and units exactly. Never diagnose, interpret, compare to ranges,
 recommend treatment, claim urgency, or add facts. Say that a clinician can explain the results.
 Offer a 30-minute doctor consultation in Asia/Kolkata during weekday business hours (09:00-18:00).
-If the person declines or is unavailable, offer rescheduling or a callback. Call book_appointment
-only after the person selects a date and time. Do not request or repeat phone numbers."""
+If the person gives only a time, ask which date they want; never invent a date. Call
+book_appointment only after the person selects both a date and time. If the booking tool returns
+an error, explain that the selected slot is unavailable and ask for another weekday time. Do not
+request or repeat phone numbers."""
+
+
+def opening_prompt(patient: DemoPatient) -> str:
+    """Provide the short first-turn instruction; policy lives in safe_instructions."""
+    supplied = "; ".join(
+        f"{item.name.value}: {item.value} {item.unit}" for item in patient.biomarkers
+    )
+    return (
+        f"Greet {patient.preferred_name} by name and introduce yourself as the healthcare "
+        f"appointment coordinator. Read these supplied biomarker values exactly: {supplied}. "
+        "Ask whether the person would like to schedule a 30-minute doctor consultation."
+    )
 
 
 def console_flow(action: str, appointment_time: str | None = None) -> dict[str, Any]:
@@ -113,7 +130,7 @@ def build_livekit_server() -> Any:
         @function_tool()
         async def book_appointment(
             self,
-            context: RunContext,
+            _context: RunContext,
             preferred_date: str,
             preferred_time: str,
         ) -> dict[str, str | bool]:
@@ -121,12 +138,22 @@ def build_livekit_server() -> Any:
 
             Use YYYY-MM-DD for preferred_date and HH:MM for preferred_time.
             """
-            appointment = self.booking.book_appointment(
-                patient_id=patient.demo_id,
-                patient_name=patient.preferred_name,
-                preferred_date=preferred_date,
-                preferred_time=preferred_time,
-            )
+            try:
+                appointment = await asyncio.to_thread(
+                    self.booking.book_appointment,
+                    patient_id=patient.demo_id,
+                    patient_name=patient.preferred_name,
+                    preferred_date=preferred_date,
+                    preferred_time=preferred_time,
+                )
+            except ValueError as exc:
+                LOGGER.info(
+                    "appointment rejected room=%s date=%s time=%s reason=%s",
+                    preferred_date,
+                    preferred_time,
+                    exc,
+                )
+                return {"success": False, "error": str(exc)}
             return self.booking.as_tool_result(appointment)
 
     @server.rtc_session(agent_name=settings.livekit_agent_name)
@@ -147,11 +174,14 @@ def build_livekit_server() -> Any:
             "agent job started room=%s agent_name=%s", ctx.room.name, settings.livekit_agent_name
         )
 
-        async def log_at_shutdown(_: str) -> None:
+        finalization_task: asyncio.Task[None] | None = None
+
+        def log_finalized_call() -> None:
+            LOGGER.info("Opik finalization started room=%s", ctx.room.name)
             transcript = json.dumps(session.history.to_dict(), default=str, ensure_ascii=False)
             analysis = analyze_call(transcript, agent.booking.latest_appointment)
             LOGGER.info(
-                "agent job shutting down room=%s booked=%s tool_calls=%d",
+                "agent job finalizing room=%s booked=%s tool_calls=%d",
                 ctx.room.name,
                 analysis.booked,
                 len(agent.booking.tool_calls),
@@ -172,24 +202,26 @@ def build_livekit_server() -> Any:
                 recording_url=settings.call_recording_url,
             )
 
+        def finalize_call() -> asyncio.Task[None] | None:
+            nonlocal finalization_task
+            if finalization_task is None:
+                finalization_task = asyncio.create_task(asyncio.to_thread(log_finalized_call))
+            return finalization_task
+
+        async def log_at_shutdown(_: str) -> None:
+            task = finalize_call()
+            if task is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=5)
+                except TimeoutError:
+                    LOGGER.warning("post-call logging is still running after shutdown grace period")
+
         ctx.add_shutdown_callback(log_at_shutdown)
         await ctx.connect()
         LOGGER.info("agent connected room=%s", ctx.room.name)
         await session.start(agent=agent, room=ctx.room)
-        biomarker_summary = ", ".join(
-            f"{item.name.value}: {item.value} {item.unit}" for item in patient.biomarkers
-        )
         LOGGER.info("agent session started room=%s", ctx.room.name)
-        await session.generate_reply(
-            instructions=(
-                f"Greet {patient.preferred_name} by name and introduce yourself as the healthcare "
-                "appointment coordinator. Read every supplied biomarker name, value, and unit "
-                f"exactly as provided: {biomarker_summary}. "
-                "Do not diagnose, interpret, compare with ranges, recommend treatment, or claim "
-                "urgency. Say that a clinician can explain the results, then ask whether the "
-                "person would like to schedule a 30-minute consultation."
-            )
-        )
+        await session.generate_reply(instructions=opening_prompt(patient))
 
     return server
 

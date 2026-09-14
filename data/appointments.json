@@ -1,47 +1,11 @@
 [
   {
     "success": true,
-    "appointment_id": "APT-beb52f80",
+    "appointment_id": "APT-9112cdab",
     "patient_id": "demo-001",
     "patient_name": "Swapnil",
-    "date": "2024-06-07",
-    "time": "15:00",
-    "status": "BOOKED"
-  },
-  {
-    "success": true,
-    "appointment_id": "APT-cf20332c",
-    "patient_id": "demo-001",
-    "patient_name": "Swapnil",
-    "date": "2023-09-14",
-    "time": "13:00",
-    "status": "BOOKED"
-  },
-  {
-    "success": true,
-    "appointment_id": "APT-d991d008",
-    "patient_id": "demo-001",
-    "patient_name": "Swapnil",
-    "date": "2023-09-14",
-    "time": "16:00",
-    "status": "BOOKED"
-  },
-  {
-    "success": true,
-    "appointment_id": "APT-b8d989f7",
-    "patient_id": "demo-001",
-    "patient_name": "Swapnil",
-    "date": "2023-09-14",
+    "date": "2026-09-16",
     "time": "17:00",
-    "status": "BOOKED"
-  },
-  {
-    "success": true,
-    "appointment_id": "APT-81c2762c",
-    "patient_id": "demo-001",
-    "patient_name": "Swapnil",
-    "date": "2024-09-10",
-    "time": "15:00",
     "status": "BOOKED"
   }
 ]
